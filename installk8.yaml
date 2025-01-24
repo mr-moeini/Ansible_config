@@ -1,0 +1,134 @@
+---
+- name: install and config Kubernetes requirments
+  hosts: all
+  become: yes
+  tasks:
+    - name: disable swap
+      command: swapoff -a
+      
+      
+    - name: Comment a swap
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: '^swap'
+        line: '# \1'
+        backrefs: yes
+      
+      
+    - name: install required packges
+      apt:
+        name:
+          - ca-certificates
+          - curl
+        update_cache: yes
+        state: present
+        
+    - name: Ensure /etc/apt/keyrings directory exists
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Download and dearmor Kubernetes GPG key
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Set correct permissions on the Kubernetes GPG keyring
+      file:
+        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        mode: '0644'    
+        
+    - name: Add Docker repository to apt sources
+      command: echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+         
+      
+    - name: install container-io
+      apt:
+        name: containerd.io
+        update_cache: yes
+        state: present
+       
+       
+    - name: default containerd config
+      command: containerd config default > /etc/containerd/config.toml
+      
+      
+    - name: Ensure SystemdCgroup is set to true in containerd config
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: '^SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'    
+
+
+    - name: load kernel module for network
+      shell: |
+        modprobe br_netfilter
+        modprobe overlay
+        
+        
+    - name: Enable IP forwarding in sysctl configuration
+      replace:
+        path: /etc/sysctl.conf
+        regexp: '^#net.ipv4.ip_forward=1'
+        replace: 'net.ipv4.ip_forward=1'
+
+
+    - name: Apply sysctl changes
+      command: sysctl --system
+ 
+
+    - name: ensure kernel module loaded
+      copy:
+        dest: /etc/modules-load.d/container-networking.conf
+        content: |
+          br_netfilter
+          overlay
+        mode: '0644'
+        
+        
+    - name: install packages for k8s
+      apt:
+        name:
+         - apt-transport-https
+         - ca-certificates
+         - curl
+         - conntrack
+        update_cache: yes
+        state: present
+       
+    - name: Download and dearmor Kubernetes GPG key
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        warn: false  
+   
+
+    - name: add kubernetes repository
+      command:  echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list > /dev/null
+
+            
+     
+    - name: Install kubernetes
+      apt:
+        name:
+           - kubelet
+           - kubeadm
+           - kubectl
+        update_cache: yes
+        state: present
+
+         
+           
+    - name: kubeadm package policy
+      command: apt-mark hold kubelet kubeadm kubectl
+           
+       
+        
+  handlers:
+    - name: Restart containerd
+      service:
+        name:
+          - daemon-reload        
+          - containerd
+        state: restarted
+        
